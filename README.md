@@ -1,54 +1,67 @@
 # Infrastructure Optimisation Pipeline
 
-Système modulaire d'analyse, de détection d'anomalies et de recommandations pour l'infrastructure technique d'une PME, développé dans le cadre d'un test technique Devoteam.
+Système d'analyse, de détection d'anomalies et de recommandations pour l'infrastructure technique d'une PME, développé dans le cadre d'un test technique Devoteam.
+
+Construit sur une **architecture hexagonale (port-adapter)** avec **LangGraph** comme orchestrateur.
 
 ---
 
 ## Architecture
 
-Le pipeline est orchestré avec **LangGraph** et structuré en 4 nœuds stateless. L'état est externalisé dans une base **SQLite** persistante entre les runs.
+```
+                    ┌─────────── INBOUND ───────────┐
+                    │  CLI (main.py) · Streamlit     │
+                    └──────────────┬────────────────┘
+                                   │
+                    ┌──────────────▼────────────────┐
+                    │       APPLICATION              │
+                    │  IngestMetrics · Detect        │
+                    │  Recommend · Predict           │
+                    │  AnalyzeBatchUseCase (façade)  │
+                    └──────┬──────────────┬──────────┘
+                           │              │
+                    ┌──────▼──────────────▼──────────┐
+                    │      DOMAINE (zéro I/O)         │
+                    │  MetricPoint · TimeWindow       │
+                    │  ThresholdEvaluator             │
+                    │  LinearForecaster               │
+                    │  PatternDetector                │
+                    │  CrisisDetector                 │
+                    │  ServiceSequenceAnalyzer        │
+                    └──────────────────────────────────┘
+                           ▲              ▲
+              PORTS (Protocol — dépendances inversées)
+           ┌───────────────┴──┐  ┌────────┴────────────┐
+           │  MetricSource    │  │  MetricRepository   │
+           │  LLMProvider     │  │  AnomalyRepository  │
+           │  ReportSink      │  │  Clock              │
+           └──────┬───────────┘  └────────┬────────────┘
+                  │                       │
+           ┌──────▼───── OUTBOUND ────────▼────────────┐
+           │  JsonFileSource · StdinJsonSource          │
+           │  InlineJsonSource · InMemorySource         │
+           │  SqliteRepository · InMemoryRepository     │
+           │  OpenAIProvider · NullLLMProvider          │
+           │  JsonFileSink · StdoutSink                 │
+           └────────────────────────────────────────────┘
+```
+
+### Pipeline LangGraph (4 nœuds)
 
 ```
-[Données JSON]
-      │
-      ▼
-┌─────────────────┐
-│  1. Ingestion   │  Validation Pydantic → normalisation → persistance SQLite
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────┐
-│  2. Détection anomalies │  Seuils par métrique + explication GPT-4o
-└────────┬────────────────┘
-         │
-         ▼
-┌──────────────────────────┐
-│  3. Recommandations      │  Analyse cross-métrique GPT-4o → actions priorisées
-└────────┬─────────────────┘
-         │
-         ▼
-┌──────────────────────────┐
-│  4. Prédiction           │  Régression linéaire (métriques graduelles)
-│                          │  + Détection de patterns (métriques réactives)
-│                          │  + Signature de crise multi-métrique
-│                          │  + Analyse séquences services
-│                          │  + Synthèse GPT-4o (risk_outlook + predicted_events)
-└────────┬─────────────────┘
-         │
-         ▼
-  [Rapport JSON + Dashboard Streamlit]
+[Source] → ingestion → anomaly → recommend → predict → [Rapport JSON]
 ```
+
+Chaque nœud délègue entièrement à son use-case — aucune logique métier dans le pipeline.
 
 ### Stratégie de prédiction
-
-Deux approches selon la nature de la métrique, justifiées par l'analyse du jeu de données (500 enregistrements, 10,5 jours) :
 
 | Métriques | Méthode | Raison |
 |---|---|---|
 | `disk_usage`, `memory_usage`, `power_consumption_watts` | Régression linéaire | Dérive lente et progressive |
-| `cpu_usage`, `latency_ms`, `io_wait`, `error_rate`, `temperature_celsius` | Détection de pattern (PRECURSOR / RISING / DECLINING / STABLE) | Spikes quasi-instantanés (91% durent 1 intervalle) — la régression ne les capte pas |
+| `cpu_usage`, `latency_ms`, `io_wait`, `error_rate`, `temperature_celsius` | Détection de pattern (PRECURSOR / RISING / DECLINING / STABLE) | Spikes quasi-instantanés — la régression ne les capte pas |
 
-Un **signal de crise multi-métrique** détecte la signature corrélée observée dans les données : toute dégradation API Gateway coïncide systématiquement avec cpu > 85%, latency > 220ms et io_wait > 7% simultanément.
+Un **signal de crise multi-métrique** détecte la signature corrélée : `cpu > 85%` + `latency > 220ms` + `io_wait > 7%` simultanément.
 
 ---
 
@@ -56,13 +69,13 @@ Un **signal de crise multi-métrique** détecte la signature corrélée observé
 
 | Composant | Choix |
 |---|---|
-| Orchestration pipeline | [LangGraph](https://github.com/langchain-ai/langgraph) |
+| Orchestration pipeline | LangGraph |
 | LLM | OpenAI GPT-4o |
-| Validation données | Pydantic v2 |
-| Persistance | SQLite (via `sqlite3`) |
+| Persistance | SQLite (`sqlite3`) |
 | Calcul statistique | NumPy, scikit-learn |
 | Dashboard | Streamlit + Plotly |
 | Observabilité | LangSmith |
+| Tests | pytest (67 tests, aucune clé API requise) |
 
 ---
 
@@ -70,25 +83,22 @@ Un **signal de crise multi-métrique** détecte la signature corrélée observé
 
 - Python 3.11+
 - Clé API OpenAI
-- Clé API LangSmith (optionnel, pour le tracing)
+- Clé API LangSmith (optionnel — tracing)
 
 ---
 
 ## Installation
 
 ```bash
-# 1. Cloner le dépôt
-git clone <repo-url>
-cd Test-Optimisation-infra
+git clone https://github.com/ntepp/optimisation-infra.git
+cd optimisation-infra
 
-# 2. Créer et activer un environnement virtuel (recommandé)
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
 # Linux / Mac
 source .venv/bin/activate
 
-# 3. Installer les dépendances
 pip install -r requirements.txt
 ```
 
@@ -96,15 +106,29 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Créer un fichier `.env` à la racine du projet :
+Copier `.env.example` en `.env` et renseigner les clés :
+
+```bash
+cp .env.example .env
+```
 
 ```env
 OPENAI_API_KEY=sk-...
+MODEL_NAME=gpt-4o
 
 # LangSmith (optionnel)
 LANGSMITH_API_KEY=lsv2_...
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_PROJECT=test-optimisation-infra
+
+# Persistance et sorties
+DB_PATH=infrastructure.db
+OUTPUT_DIR=output
+
+# Fenêtres d'historique (use-cases)
+HISTORY_WINDOW_ANOMALY=10
+HISTORY_WINDOW_RECOMMENDATION=5
+HISTORY_WINDOW_PREDICTION=20
 ```
 
 ---
@@ -115,42 +139,54 @@ LANGCHAIN_PROJECT=test-optimisation-infra
 
 **Windows**
 ```bat
-start_app.bat               # conserve la base de données existante
-start_app.bat --init-db     # réinitialise la base de données avant démarrage
-start_app.bat --fresh       # alias de --init-db
-
-stop_app.bat                # arrête le serveur
+start_app.bat           # conserve la base existante
+start_app.bat --init-db # réinitialise la base avant démarrage
+stop_app.bat
 ```
 
 **Linux / Mac**
 ```bash
-chmod +x start_app.sh stop_app.sh   # une seule fois
-
-./start_app.sh              # conserve la base de données existante
-./start_app.sh --init-db    # réinitialise la base de données avant démarrage
-./start_app.sh --fresh      # alias de --init-db
-
-./stop_app.sh               # arrête le serveur
+chmod +x start_app.sh stop_app.sh
+./start_app.sh
+./stop_app.sh
 ```
 
 Ouvrir [http://localhost:8501](http://localhost:8501)
 
 ---
 
-### CLI (ligne de commande)
+### CLI
 
+**Source fichier (défaut)**
 ```bash
-# Analyser un seul enregistrement (index 0 = premier, souvent le plus critique)
-python main.py --mode single --input docs/rapport.json --index 0
+python main.py --source file --input docs/rapport.json
+python main.py --source file --input docs/rapport.json --window 120
+python main.py --source file --input docs/rapport.json --all
+python main.py --source file --input docs/rapport.json --index 0
+```
 
-# Analyser une fenêtre de 2 heures depuis le début du fichier
-python main.py --mode batch --input docs/rapport.json --window 120
+**Source stdin (pipe)**
+```bash
+cat docs/rapport.json | python main.py --source stdin
+echo '{"timestamp":"2026-05-18T12:00:00Z","cpu_usage":92,...}' | python main.py --source stdin
+```
 
-# Analyser l'intégralité du fichier
-python main.py --mode batch --input docs/rapport.json --all
+**Source inline (argument)**
+```bash
+python main.py --source inline --json '{"timestamp":"2026-05-18T12:00:00Z","cpu_usage":92,...}'
 ```
 
 Le rapport JSON est affiché sur `stdout` et sauvegardé dans `output/report_<timestamp>.json`.
+
+---
+
+## Tests
+
+```bash
+pytest -q
+```
+
+67 tests couvrant le domaine, les adapters et le pipeline end-to-end. Aucune clé OpenAI requise — le `NullLLMProvider` remplace le LLM réel.
 
 ---
 
@@ -158,7 +194,7 @@ Le rapport JSON est affiché sur `stdout` et sauvegardé dans `output/report_<ti
 
 ```json
 {
-  "timestamp": "2023-10-01T12:00:00Z",
+  "timestamp": "2026-05-18T12:00:00Z",
   "cpu_usage": 85,
   "memory_usage": 70,
   "latency_ms": 250,
@@ -180,13 +216,15 @@ Le rapport JSON est affiché sur `stdout` et sauvegardé dans `output/report_<ti
 }
 ```
 
+Les sources acceptent un objet unique ou une liste d'objets.
+
 ---
 
 ## Format du rapport de sortie
 
 ```json
 {
-  "generated_at": "2026-05-16T10:30:00Z",
+  "generated_at": "2026-05-18T12:30:00Z",
   "mode": "batch",
   "records_processed": 4,
   "anomalies": [
@@ -196,7 +234,7 @@ Le rapport JSON est affiché sur `stdout` et sauvegardé dans `output/report_<ti
       "threshold": 90.0,
       "severity": "CRITICAL",
       "explanation": "CPU à 93% indique une saturation...",
-      "timestamp": "2023-10-01T12:00:00Z"
+      "timestamp": "2026-05-18T12:00:00Z"
     }
   ],
   "recommendations": [
@@ -227,20 +265,13 @@ Le rapport JSON est affiché sur `stdout` et sauvegardé dans `output/report_<ti
     "service_signals": {
       "api_gateway": {
         "current_status": "degraded",
-        "recent_degradation": true,
         "active_transition": true,
         "issue_rate_in_history": 0.134,
         "risk": "WARNING"
       }
     },
     "risk_outlook": "Le CPU et la latence sont en trajectoire ascendante...",
-    "predicted_events": [
-      {
-        "event": "API Gateway likely to degrade further",
-        "probability": "HIGH",
-        "timeframe": "30min"
-      }
-    ]
+    "predicted_events": []
   },
   "errors": []
 }
@@ -251,35 +282,56 @@ Le rapport JSON est affiché sur `stdout` et sauvegardé dans `output/report_<ti
 ## Structure du projet
 
 ```
-Test-Optimisation-infra/
+optimisation-infra/
 ├── src/
-│   ├── pipeline/
-│   │   ├── graph.py                 # LangGraph StateGraph (4 nœuds)
-│   │   ├── state.py                 # PipelineState TypedDict
-│   │   └── nodes/
-│   │       ├── ingestion.py         # Nœud 1 — validation & persistance
-│   │       ├── anomaly_detection.py # Nœud 2 — seuils + explication LLM
-│   │       ├── recommendation.py    # Nœud 3 — recommandations cross-métriques
-│   │       ├── prediction.py        # Nœud 4 — prédiction & signaux de crise
-│   │       └── _utils.py            # Nettoyage réponses LLM (markdown fences)
-│   ├── db/
-│   │   └── storage.py               # Interface SQLite
-│   ├── models/
-│   │   └── schemas.py               # Modèles Pydantic
-│   └── config.py                    # Seuils d'anomalie, constantes
+│   ├── domain/              # Logique métier pure, zéro I/O
+│   │   ├── metrics.py       # MetricPoint, MetricSeries, TimeWindow
+│   │   ├── anomalies.py     # Anomaly, ThresholdEvaluator
+│   │   ├── forecasting.py   # LinearForecaster, PatternDetector, RiskClassifier
+│   │   ├── crisis.py        # CrisisDetector, CrisisSignature
+│   │   ├── services.py      # ServiceSequenceAnalyzer, ServiceSignal
+│   │   └── recommendation.py
+│   ├── ports/               # Interfaces (Protocol)
+│   │   ├── sources.py       # MetricSource
+│   │   ├── repository.py    # MetricRepository, AnomalyRepository
+│   │   ├── llm.py           # LLMProvider
+│   │   ├── sinks.py         # ReportSink
+│   │   └── clock.py         # Clock
+│   ├── application/
+│   │   ├── dto.py           # AnalysisRequest, AnalysisReport
+│   │   └── use_cases/
+│   │       ├── ingest_metrics.py
+│   │       ├── detect_anomalies.py
+│   │       ├── recommend.py
+│   │       ├── predict.py
+│   │       └── analyze_batch.py
+│   ├── adapters/
+│   │   ├── inbound/
+│   │   │   ├── cli.py       # Parsing args, entrée CLI
+│   │   │   └── runner.py    # run_analysis() — partagé CLI + Streamlit
+│   │   └── outbound/
+│   │       ├── sources/     # JsonFile · Stdin · Inline · InMemory
+│   │       ├── persistence/ # Sqlite · InMemory repos
+│   │       ├── llm/         # OpenAI · Null providers
+│   │       └── sinks/       # JsonFile · Stdout
+│   └── infrastructure/
+│       ├── config.py        # Settings (env vars + defaults)
+│       ├── container.py     # Composition root — câblage DI
+│       └── pipeline_graph.py# LangGraph StateGraph
+├── tests/                   # 67 tests, pytest
 ├── docs/
-│   ├── rapport.json                 # 500 enregistrements (10,5 jours)
-├── output/                          # Rapports JSON générés
-├── app.py                           # Dashboard Streamlit
-├── main.py                          # Entrée CLI
-├── start_app.bat / start_app.sh     # Démarrage (Windows / Linux-Mac)
-├── stop_app.bat  / stop_app.sh      # Arrêt   (Windows / Linux-Mac)
+│   └── rapport.json         # 500 enregistrements de démonstration
+├── app.py                   # Dashboard Streamlit
+├── main.py                  # Entrée CLI (~15 lignes)
+├── start_app.bat / .sh
+├── stop_app.bat  / .sh
 ├── requirements.txt
-└── .env                             # Clés API (non versionné)
+├── .env.example
+└── .gitignore
 ```
 
 ---
 
-## Observabilité LangSmith
+## Observabilité
 
-Quand `LANGCHAIN_TRACING_V2=true` est défini, chaque run du pipeline est automatiquement tracé dans le dashboard LangSmith sous le projet `test-optimisation-infra`. Chaque nœud LangGraph apparaît comme un span distinct avec ses inputs/outputs et les appels GPT-4o détaillés.
+Quand `LANGCHAIN_TRACING_V2=true`, chaque run est tracé dans LangSmith sous le projet `test-optimisation-infra`. Chaque nœud LangGraph apparaît comme un span distinct avec ses inputs/outputs et les appels GPT-4o détaillés.

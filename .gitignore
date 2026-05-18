@@ -1,0 +1,76 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# ── Virtual environments ─────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.env.local
+
+# ── Secrets & environment variables ─────────────────────────────────────────
+.env
+*.env
+!.env.example
+
+# ── Testing & coverage ──────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.test.db
+
+# ── Type checking ────────────────────────────────────────────────────────────
+.mypy_cache/
+.pyright/
+pyrightconfig.json
+
+# ── Build & packaging ────────────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── LangSmith / LangChain traces ─────────────────────────────────────────────
+langsmith_traces/
+.langchain/
+
+# ── Databases ────────────────────────────────────────────────────────────────
+*.db
+*.db.bak
+*.sqlite
+*.sqlite3
+
+# ── Pipeline output ──────────────────────────────────────────────────────────
+output/
+test_output.txt
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+__MACOSX/
+
+# ── Claude Code internal state ───────────────────────────────────────────────
+.claude/
